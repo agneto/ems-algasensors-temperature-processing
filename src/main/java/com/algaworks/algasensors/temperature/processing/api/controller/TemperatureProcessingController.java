@@ -3,7 +3,10 @@ package com.algaworks.algasensors.temperature.processing.api.controller;
 import com.algaworks.algasensors.temperature.processing.api.model.TemperatureLogOutput;
 import com.algaworks.algasensors.temperature.processing.common.IdGenerator;
 import io.hypersistence.tsid.TSID;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.amqp.core.MessagePostProcessor;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
@@ -11,10 +14,15 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.time.OffsetDateTime;
 
+import static com.algaworks.algasensors.temperature.processing.infrastructure.rabbitmq.RabbitMQConfig.FANOUT_EXCHANGE_NAME;
+
 @RestController
 @RequestMapping("/api/sensors/{sensorId}/temperatures/data")
 @Slf4j
+@RequiredArgsConstructor
 public class TemperatureProcessingController {
+
+    private final RabbitTemplate rabbitTemplate;
 
     @PostMapping(consumes = MediaType.TEXT_PLAIN_VALUE)
     public void data(@PathVariable TSID sensorId, @RequestBody String input) {
@@ -30,7 +38,7 @@ public class TemperatureProcessingController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST);
         }
 
-        TemperatureLogOutput logOutput = TemperatureLogOutput.builder()
+        final TemperatureLogOutput logOutput = TemperatureLogOutput.builder()
                 .id(IdGenerator.generateTimeBasedUUID())
                 .sensorId(sensorId)
                 .value(temperature)
@@ -38,6 +46,18 @@ public class TemperatureProcessingController {
                 .build();
 
         log.info(logOutput.toString());
+
+        final MessagePostProcessor messagePostProcessor = message -> {
+            message.getMessageProperties().setHeader("sensorId", logOutput.getSensorId().toString());
+            return message;
+        };
+
+        final String exchange = FANOUT_EXCHANGE_NAME;
+        String routingKey = "";
+        Object payload = logOutput;
+
+        rabbitTemplate.convertAndSend(exchange, routingKey, payload, messagePostProcessor);
+
 
     }
 
